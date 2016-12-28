@@ -2,6 +2,7 @@ from __future__ import print_function
 from datetime import timedelta
 from dateutil import parser, relativedelta, tz
 from boto3 import resource
+import time;
 
 # You must populate either the VOLUMES variable or the
 # TAGS variable, but not both.
@@ -34,12 +35,12 @@ REGION = "us-east-1"
 TIMEZONE = "UTC"
 
 
-def purge_snapshots(id, snaps, counts):
+def purge_snapshots(id, snaps, counts, vol):
     newest = snaps[-1]
     prev_start_date = None
     delete_count = 0
     keep_count = 0
-
+    print("---- Purge summary for " + vol + "------")
     print("---- RESULTS FOR {} ({} snapshots) ----".format(id, len(snaps)))
 
     for snap in snaps:
@@ -89,6 +90,7 @@ def purge_snapshots(id, snaps, counts):
                           snap_date, snap_age.days)
                           )
                     if NOOP is False:
+                        print("about to delete but not deleting :P")
                         snap.delete()
                     delete_count += 1
         else:
@@ -141,6 +143,7 @@ def get_tag_snaps(ec2, account_id):
             "Values": ["completed"]
         }
     ]
+
     for key, value in TAGS.iteritems():
         collection_filter.append(
             {
@@ -163,7 +166,7 @@ def print_summary(counts):
         print("-------------------------------------------\n")
 
 
-def main(event, context):
+def main(event,context):
     global NOW
     global START_WEEKS_AFTER
     global START_MONTHS_AFTER
@@ -171,6 +174,7 @@ def main(event, context):
     global NOOP
     global NOT_REALLY_STR
 
+    event['time'] = time.strftime("%Y-%m-%d")+"T00:00:00Z"
     NOW = parser.parse(event['time']).astimezone(tz.gettz(TIMEZONE))
     START_WEEKS_AFTER = HOURS + (DAYS * 24)
     START_MONTHS_AFTER = START_WEEKS_AFTER + (WEEKS * 24 * 7)
@@ -195,10 +199,28 @@ def main(event, context):
         tag_string = " ".join("{}={}".format(key, val) for
                                             (key, val) in TAGS.iteritems())
         snapshots = get_tag_snaps(ec2, event['account'])
-        if snapshots:
-            purge_snapshots(tag_string, snapshots, tag_counts)
-            print_summary(tag_counts)
-        else:
-            print("No snapshots found with tags: {}".format(tag_string))
+        print("Num of all snapshots...")
+        print(len(snapshots))
+        all_volume = []
+
+        for snap in snapshots:
+            all_volume.append(snap.volume_id)
+        uniq_vol_list = list(set(all_volume))
+        print("Snapshots of following volume found..")
+        print(uniq_vol_list)
+        snapshot_dict = dict((i,[]) for i in uniq_vol_list)
+
+        for vol in uniq_vol_list:
+            for snap in snapshots:
+                if snap.volume_id == vol:
+                    snapshot_dict[vol].append(snap)
+                    #snapshots.remove(snap)
+
+        for item in snapshot_dict.keys():
+            if snapshot_dict[item]:
+                purge_snapshots(tag_string,snapshot_dict[item], tag_counts, item)
+                print_summary(tag_counts)
+            else:
+                print("No snapshots found for volume -" + item)
     else:
         print("You must populate either the VOLUMES OR the TAGS variable.")
